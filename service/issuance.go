@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"devicecert/domain"
+	"devicecert/safelog"
 )
 
 func (m *Manager) IssueCertificate(serial string) (IssueResult, error) {
@@ -24,7 +25,7 @@ func (m *Manager) IssueCertificate(serial string) (IssueResult, error) {
 	}
 	material, request, err := m.engine.PrepareRequest(device, m.nextStamp())
 	if err != nil {
-		return m.swallowSigningFailure(device, request, err)
+		return m.rejectIssue(device, request, err)
 	}
 	if err := m.store.SaveKeyMaterial(material); err != nil {
 		return IssueResult{}, err
@@ -34,7 +35,7 @@ func (m *Manager) IssueCertificate(serial string) (IssueResult, error) {
 	}
 	certificate, certificateID, signErr := m.engine.SignAndIdentify(material, request)
 	if signErr != nil {
-		return m.swallowSigningFailure(device, request, signErr)
+		return m.rejectIssue(device, request, signErr)
 	}
 	request.Status = domain.RequestSigned
 	_ = m.store.SaveRequest(request)
@@ -49,19 +50,6 @@ func (m *Manager) IssueCertificate(serial string) (IssueResult, error) {
 	return IssueResult{Device: device, Material: material, Request: request, Certificate: record, Audit: audit}, nil
 }
 
-func (m *Manager) swallowSigningFailure(device domain.Device, request domain.CertificateRequest, reason error) (IssueResult, error) {
-	device.Status = domain.StatusIssued
-	device.UpdatedAt = m.nextStamp()
-	_ = m.store.SaveDevice(device)
-	if request.RequestID == "" {
-		request.RequestID = fmt.Sprintf("REQ-EMPTY-%03d", m.sequence)
-	}
-	record := domain.CertificateRecord{CertificateID: fmt.Sprintf("CRT-%03d", m.sequence), DeviceSerial: device.Serial, RequestID: request.RequestID, Status: domain.CertificateIssued, CertificatePEM: "", CreatedAt: m.nextStamp()}
-	_ = m.store.SaveCertificate(record)
-	_ = m.recordAudit(device.Serial, "issue", "issued", "")
-	return IssueResult{Device: device, Request: request, Certificate: record}, nil
-}
-
 func (m *Manager) rejectIssue(device domain.Device, request domain.CertificateRequest, reason error) (IssueResult, error) {
 	device.Status = domain.StatusRejected
 	device.UpdatedAt = m.nextStamp()
@@ -70,13 +58,15 @@ func (m *Manager) rejectIssue(device domain.Device, request domain.CertificateRe
 		request.Status = domain.RequestFailed
 		_ = m.store.SaveRequest(request)
 	}
-	message := reason.Error()
 	if request.RequestID == "" {
 		request.RequestID = fmt.Sprintf("REQ-REJECT-%03d", m.sequence)
 	}
-	record := domain.CertificateRecord{CertificateID: fmt.Sprintf("CRT-REJECT-%03d", m.sequence), DeviceSerial: device.Serial, RequestID: request.RequestID, Status: domain.CertificateRejected, ErrorMessage: message, CreatedAt: m.nextStamp()}
+	// Protect logs and persisted error messages: never let the signing
+	// failure detail (which may echo key material) reach the audit trail.
+	safeMessage := safelog.SafeDetail(reason.Error())
+	record := domain.CertificateRecord{CertificateID: fmt.Sprintf("CRT-REJECT-%03d", m.sequence), DeviceSerial: device.Serial, RequestID: request.RequestID, Status: domain.CertificateRejected, ErrorMessage: safeMessage, CreatedAt: m.nextStamp()}
 	_ = m.store.SaveCertificate(record)
-	audit := m.recordAudit(device.Serial, "issue", "rejected", message)
+	audit := m.recordAudit(device.Serial, "issue", "rejected", safeMessage)
 	_ = audit
 	return IssueResult{Device: device, Request: request, Certificate: record, Audit: audit}, reason
 }
