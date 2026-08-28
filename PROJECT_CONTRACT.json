@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "metrics": {
+    "production_loc": 2307,
+    "production_files": 38,
+    "production_packages": 8,
+    "test_files": 10,
+    "production_functions": 242,
+    "decision_points": 280
+  },
+  "persistence": {
+    "module": "go.etcd.io/bbolt",
+    "entities": [
+      "Device",
+      "KeyMaterial",
+      "CertificateRequest",
+      "CertificateRecord",
+      "AuditEvent"
+    ],
+    "reopen_test": "TestPersistenceSurvivesReopen"
+  },
+  "workflows": [
+    {
+      "steps": [
+        "validate device serial and model input",
+        "create a registered Device entity",
+        "persist the device and safe AuditEvent",
+        "load and display the registered status"
+      ],
+      "test": "TestWorkflowOne"
+    },
+    {
+      "steps": [
+        "load a registered device",
+        "generate deterministic ECC KeyMaterial and CertificateRequest",
+        "sign the request and handle issuance status",
+        "persist and display the CertificateRecord"
+      ],
+      "test": "TestWorkflowTwo"
+    },
+    {
+      "steps": [
+        "close the active bbolt store",
+        "reopen the persisted database",
+        "reload device request certificate and audit entities",
+        "display the recovered issuance result"
+      ],
+      "test": "TestWorkflowThree"
+    }
+  ]
+}
